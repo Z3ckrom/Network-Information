@@ -1,0 +1,259 @@
+import re
+from sys import executable
+import tkinter as tk
+import socket
+import subprocess
+import os
+import requests # type: ignore
+import shutil
+from scapy.all import sniff, get_if_list # type: ignore
+from scapy.contrib.lldp import ( # type: ignore
+    LLDPDUChassisID,
+    LLDPDUPortID,
+    LLDPDUSystemName,
+    LLDPDUPortDescription,
+)
+
+def get_ip_address():
+    try:
+        result = subprocess.run(['ipconfig'], capture_output=True, text=True)
+
+        # Find the IPv4 Address
+        match = re.search(
+            r'IPv4 Address[.\s]*:\s*([\d.]+)',
+            result.stdout)
+
+        return match.group(1) if match else "Not Connected"
+
+    except Exception as e:
+        return f"Error: {e}"
+
+def get_gateway():
+    try:
+        result = subprocess.run(['ipconfig'], capture_output=True, text=True)
+
+        # Find the default gateway
+        match = re.search(
+            r'Default Gateway[.\s]*:\s*([\d.]+)',
+            result.stdout)
+
+        return match.group(1) if match else "No Gateway Found"
+
+    except Exception as e:
+        return f"Error: {e}"
+
+def ping_test(host):
+    try:
+        result = subprocess.run(['ping', '-n', '4', host], capture_output=True, text=True, timeout=15)
+
+        return result.stdout if result.returncode == 0 else "Ping Failed"
+    except subprocess.TimeoutExpired:
+        return "Error: Ping timed out"
+    except Exception as e:
+        return f"Error: {e}"
+
+    # Asks user what IP or hostname to ping
+    host = input("Enter the IP address or hostname: ")
+    print(ping_test(host))
+
+
+def get_public_ip():
+    try:
+        response = requests.get('https://api.ipify.org')
+        if response.status_code == 200:
+            return response.text
+        return "Unable to fetch public IP"
+    except Exception as e:
+        return f"Error: {e}"
+
+def get_bandwidth(interface=None):
+    try:
+        command = [
+            "powershell",
+            "-NoProfile",
+            "-Command",
+            "Get-NetAdapter | Select-Object Name, InterfaceDescription, Status, LinkSpeed | ConvertTo-Csv -NotypeInformation"]
+        
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=10)
+
+        if result.returncode != 0:
+
+            return result.stderr.strip() or "Unable to get adapter speed"
+
+        lines = result.stdout.strip().splitlines()
+
+        if len(lines) < 2:
+
+            return "No network adapters found"
+
+        # Display all adapters if no interface is specified
+
+        if interface is None:
+
+            return "\n".join(lines)
+
+        # Find adapter by name or interface description
+
+        import csv
+
+        from io import StringIO
+
+        adapters = list(csv.DictReader(StringIO(result.stdout)))
+
+        for adapter in adapters:
+
+            if (
+
+                adapter["Name"].lower() == interface.lower()
+
+                or adapter["InterfaceDescription"].lower() == interface.lower()
+
+            ):
+
+                return adapter["LinkSpeed"]
+
+        return f"Interface '{interface}' not found"
+
+    except Exception as e:
+
+        return f"Error: {e}"
+
+print(get_bandwidth())
+
+
+def get_lldp_info():
+    def get_lldp_info():
+
+        executable = shutil.which("lldpctl")
+
+    if executable is None:
+
+        return (
+
+            "LLDP tool not found",
+
+            "Install or configure a Windows-compatible LLDP utility"
+
+        )
+
+    try:
+
+        result = subprocess.run(
+
+            [executable],
+
+            capture_output=True,
+
+            text=True,
+
+            timeout=10
+
+        )
+
+        if result.returncode != 0:
+
+            return (
+
+                result.stderr.strip() or "Unable to retrieve LLDP data",
+
+                "Not available"
+
+            )
+
+        port_id = "Not available"
+
+        switch_name = "Not available"
+
+        for line in result.stdout.splitlines():
+
+            line = line.strip()
+
+            if line.startswith(("PortID:", "Port ID:")):
+
+                port_id = line.split(":", 1)[1].strip()
+
+            elif line.startswith("SysName:") or line.startswith("System Name:"):
+
+                switch_name = line.split(":", 1)[1].strip()
+
+        return port_id, switch_name
+
+    except subprocess.TimeoutExpired:
+
+        return "LLDP request timed out", "Not available"
+
+    except Exception as e:
+
+        return f"Error: {e}", "Not available"
+
+
+def display_info():
+    ip_label.config(text=f"IP Address: {get_ip_address()}")
+    gateway_label.config(text=f"Gateway: {get_gateway()}")
+    public_ip_label.config(text=f"Public IP: {get_public_ip()}")
+    ping_result = ping_test('8.8.8.8')
+    ping_label.config(text=f"Ping Result:\n{ping_result}")
+    bandwidth = get_bandwidth()
+    bandwidth_label.config(text=f"Bandwidth: {bandwidth}")
+
+    port_id, switch_name = get_lldp_info()
+    port_id_label.config(text=f"Port ID: {port_id}")
+    switch_name_label.config(text=f"Switch Name: {switch_name}")
+
+def pulse_cable():
+    # Placeholder logic replace with GPIO logic when ready
+    port_id_label.config(text="Port ID: Pulsing...")
+    switch_name_label.config(text="Switch Name: Pulsing signal sent")
+
+# ---------- UI ----------
+window = tk.Tk()
+window.title("Network Tester")
+
+screen_width = window.winfo_screenwidth()
+screen_height = window.winfo_screenheight()
+window.geometry(f"{screen_width}x{screen_height}")
+
+main_frame = tk.Frame(window)
+main_frame.pack(fill="both", expand=True)
+
+button_frame = tk.Frame(main_frame, width=200)
+button_frame.pack(side="left", fill="y", padx=10, pady=10)
+
+output_frame = tk.Frame(main_frame)
+output_frame.pack(side="right", fill="both", expand=True, padx=10, pady=10)
+
+# Output Labels
+ip_label = tk.Label(output_frame, text="IP Address: ", font=("Helvetica", 12), anchor="w")
+ip_label.pack(fill='x', pady=2)
+
+gateway_label = tk.Label(output_frame, text="Gateway: ", font=("Helvetica", 12), anchor="w")
+gateway_label.pack(fill='x', pady=2)
+
+public_ip_label = tk.Label(output_frame, text="Public IP: ", font=("Helvetica", 12), anchor="w")
+public_ip_label.pack(fill='x', pady=2)
+
+ping_label = tk.Label(output_frame, text="Ping Result: ", font=("Helvetica", 12), anchor="w", justify="left", wraplength=screen_width - 250)
+ping_label.pack(fill='x', pady=2)
+
+bandwidth_label = tk.Label(output_frame, text="Bandwidth: ", font=("Helvetica", 12), anchor="w")
+bandwidth_label.pack(fill='x', pady=2)
+
+port_id_label = tk.Label(output_frame, text="Port ID: ", font=("Helvetica", 12), anchor="w")
+port_id_label.pack(fill='x', pady=2)
+
+switch_name_label = tk.Label(output_frame, text="Switch Name: ", font=("Helvetica", 12), anchor="w")
+switch_name_label.pack(fill='x', pady=2)
+
+# Buttons
+test_button = tk.Button(button_frame, text="Network Test", font=("Helvetica", 10), command=display_info)
+test_button.pack(fill="x", pady=5)
+
+pulse_button = tk.Button(button_frame, text="Pulse Cable", font=("Helvetica", 10), command=pulse_cable)
+pulse_button.pack(fill="x", pady=5)
+
+window.mainloop()
+
