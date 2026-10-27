@@ -7,17 +7,16 @@ from tkinter import ttk, messagebox
 import requests
 import shutil
 
-# Optional Scapy LLDP support
+
 try:
     import scapy
     print("Scapy:", scapy.__version__)
 
-    from scapy.all import get_if_list
+    from scapy.all import sniff, get_if_list
 
-    for i in get_if_list():
-        print(i)
+    from scapy.arch.windows import get_windows_if_list
 
-    from scapy.all import sniff
+
     print("sniff import OK")
 
     count = 0
@@ -134,22 +133,54 @@ def get_lldp_info():
             print("PROCESS ERROR:", e)
 
         
+    for iface in get_windows_if_list():
 
-    sniff(
-        iface="Ethernet",
-        filter="ether proto 0x88cc",
-        timeout=15,
-        store=False,
-        prn=process
-    )
+        name = iface["name"]
+        desc = iface["description"]
 
-    print("FINAL PORT:", data["port"])
-    print("FINAL SWITCH:", data["switch"])
+        print(f"Checking: {name}")
+        print(f"Description: {desc}")
+        print("-" * 50)
 
-    if data["port"] != "No LLDP Detected" and data["switch"] != "No LLDP Detected":
-            return data["port"], data["switch"]
+        desc_lower = desc.lower()
+
+        # Skip non-physical adapters
+        if any(x in desc for x in [
+            "loopback",
+            "vmware",
+            "hyper-v",
+            "virtual",
+            "vpn",
+            "wireless",
+            "wi-fi"
+        ]):
+            print(f"Skipping: {iface['description']}")
+            continue
+
+        try:
+
+            print(f"Listening on {name}")
+
+            sniff(
+                iface=name,
+                filter="ether proto 0x88cc",
+                timeout=3,
+                store=False,
+                prn=process
+            )
+
+            if (data["port"] != "No LLDP Detected" and
+                data["switch"] != "No LLDP Detected"):
+
+                print(f"LLDP FOUND ON {name}")
+
+                return data["port"], data["switch"]
+
+        except Exception as e:
+            print(f"{name} ERROR: {e}")
 
     return data["port"], data["switch"]
+
 
 
 class NetworkTester:
@@ -208,6 +239,7 @@ class NetworkTester:
         ttk.Button(buttons, text="Refresh", command=self.refresh).pack(side="left", padx=5)
         ttk.Button(buttons, text="Ping Google DNS", command=self.run_ping).pack(side="left", padx=5)
         ttk.Button(buttons, text="Pulse Cable", command=self.pulse_cable).pack(side="left", padx=5)
+      
 
         log_frame = ttk.LabelFrame(self.root, text="Activity Log", padding=5)
         log_frame.pack(fill="both", expand=True, padx=10, pady=10)
