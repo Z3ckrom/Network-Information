@@ -147,7 +147,7 @@ def get_lldp_info():
     print("FINAL SWITCH:", data["switch"])
 
     if data["port"] != "No LLDP Detected" and data["switch"] != "No LLDP Detected":
-            return True
+            return data["port"], data["switch"]
 
     return data["port"], data["switch"]
 
