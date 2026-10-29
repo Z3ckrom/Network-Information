@@ -4,20 +4,24 @@ import subprocess
 import threading
 import tkinter as tk
 from tkinter import ttk, messagebox
+from tkinter import *
 import requests
 import shutil
+import sys, ctypes
 
-# Optional Scapy LLDP support
+if sys.platform.startswith("win"):
+    ctypes.windll.user32.ShowWindow(ctypes.windll.kernel32.GetConsoleWindow(), 0)
+
+
 try:
     import scapy
     print("Scapy:", scapy.__version__)
 
-    from scapy.all import get_if_list
+    from scapy.all import sniff, get_if_list
 
-    for i in get_if_list():
-        print(i)
+    from scapy.arch.windows import get_windows_if_list
 
-    from scapy.all import sniff
+
     print("sniff import OK")
 
     count = 0
@@ -34,6 +38,8 @@ except Exception as e:
     SCAPY_AVAILABLE = False
 
 APP_TITLE = "Network Information Pro"
+
+
 
 
 def get_ip_address():
@@ -95,62 +101,144 @@ def get_bandwidth():
 
 
 def get_lldp_info():
-    data = {
-        "switch": "No LLDP Detected",
-        "port": "No LLDP Detected"
-    }
+    results = []
 
-    def process(pkt):
-        try:
-            print("LLDP RECEIVED")
+    for iface in get_windows_if_list():
 
-            # Walk through all layers
-            current = pkt
+        name = iface["name"]
+        desc = iface["description"]
 
-            while current:
-                cls = current.__class__.__name__
+        print("=" * 60)
+        print("INTERFACE")
+        print(f"Name        : {name}")
+        print(f"Description : {desc}")
+        print("=" * 60)
 
-                if cls == "LLDPDUPortID":
-                    port = current.id
+       
 
-                    if isinstance(port, bytes):
-                        port = port.decode(errors="ignore")
+        desc_lower = desc.lower()
 
-                    data["port"] = port
-                    print("PORT FOUND:", port)
+        # Skip non-physical adapters
+        if any(x in desc_lower for x in [
+            "loopback",
+            "vmware",
+            "hyper-v",
+            "virtual",
+            "vpn",
+            "wireless",
+            "wi-fi",
+            "miniport",
+            "6to4",
+            "ip-https",
+            "isatap",
+            "teredo"
+        ]):
+            print(f"Skipping: {iface['description']}")
+            continue
 
-                elif cls == "LLDPDUSystemName":
-                    name = current.system_name
-                        
-                    if isinstance(name, bytes):
-                        name = name.decode(errors="ignore")
+        # Fresh data for this interface
+        data = {
+            "switch": "No LLDP Detected",
+            "port": "No LLDP Detected"
+        }
 
-                    data["switch"] = name
-                    print("SWITCH FOUND:", name)
+        def process(pkt):
 
-                current = current.payload
+                try:
+                    print(f"LLDP RECEIVED ON {name}")
 
-        except Exception as e:
-            print("PROCESS ERROR:", e)
+                    current = pkt
+
+                    while current:
+
+                        cls = current.__class__.__name__
+
+                        if cls == "LLDPDUPortID":
+    
+                                port = current.id
+
+                                if isinstance(port, bytes):
+                                    port = port.decode(errors="ignore")
+
+                                data["port"] = port
+                                print("PORT FOUND:", port)
+
+                        elif cls == "LLDPDUSystemName":
+
+                                switch = current.system_name
+    
+                                if isinstance(switch, bytes):
+                                    switch = switch.decode(errors="ignore")
+
+                                data["switch"] = switch
+                                print("SWITCH FOUND:", switch)
+
+                        current = current.payload
+
+                except Exception as e:
+                    print("PROCESS ERROR:", e)
+
 
         
 
-    sniff(
-        iface="Ethernet",
-        filter="ether proto 0x88cc",
-        timeout=15,
-        store=False,
-        prn=process
-    )
+        try:
 
-    print("FINAL PORT:", data["port"])
-    print("FINAL SWITCH:", data["switch"])
+            print(f"Listening on {name}")
 
-    if data["port"] != "No LLDP Detected" and data["switch"] != "No LLDP Detected":
-            return True
+            sniff(
+                iface=name,
+                filter="ether proto 0x88cc",
+                timeout=3,
+                store=False,
+                prn=process
+            )
+            
+            if (
+                data["port"] != "No LLDP Detected"
+                and data["switch"] != "No LLDP Detected"
+            ):
 
-    return data["port"], data["switch"]
+                results.append({
+                    "interface": name,
+                    "description": desc,
+                    "switch": data["switch"],
+                    "port": data["port"]
+                })
 
+                print()
+                print("LLDP DISCOVERY")
+                print(f"Interface : {name}")
+                print(f"Switch    : {data['switch']}")
+                print(f"Port      : {data['port']}")
+                print("-" * 50)
+
+        except Exception as e:
+            print(f"{name} ERROR: {e}")
+
+    print()
+    print("-" * 60)
+    print("FINAL RESULTS")
+    print("-" * 60)
+
+    if results:
+
+        for idx, device in enumerate(results, start=1):
+
+            print(f"Connection #{idx}")
+            print(f"  Interface   : {device['interface']}")
+            print(f"  Description : {device['description']}")
+            print(f"  Switch      : {device['switch']}")
+            print(f"  Port        : {device['port']}")
+            print()
+
+    else:
+
+        print("No LLDP devices found")
+
+    print("=" * 60)
+    
+    return results
+    
 
 class NetworkTester:
 
@@ -186,38 +274,53 @@ class NetworkTester:
         self.gateway_var = tk.StringVar(value="-")
         self.public_var = tk.StringVar(value="-")
         self.speed_var = tk.StringVar(value="-")
-        self.port_var = tk.StringVar(value="-")
-        self.switch_var = tk.StringVar(value="-")
+
 
         fields = [
             ("IP Address", self.ip_var),
             ("Gateway", self.gateway_var),
             ("Public IP", self.public_var),
             ("Link Speed", self.speed_var),
-            ("Switch Port", self.port_var),
-            ("LLDP Switch", self.switch_var),
+            
         ]
 
         for row, (label, var) in enumerate(fields):
             ttk.Label(cards, text=label + ":", font=("Segoe UI", 10, "bold")).grid(row=row, column=0, sticky="w", pady=3)
             ttk.Label(cards, textvariable=var).grid(row=row, column=1, sticky="w", padx=10)
+            
+        lldp_frame = ttk.LabelFrame(self.root, text="LLDP Connections", padding=10)
+        lldp_frame.pack(fill="x", padx=10, pady=5)
+         
+        self.lldp_tree = ttk.Treeview(lldp_frame, columns=("Interface", "Switch", "Port"), show="headings", height=8)
+        self.lldp_tree.heading("Interface",text="Interface")
+        self.lldp_tree.heading("Switch", text="Switch")
+        self.lldp_tree.heading("Port", text="Port")
+        self.lldp_tree.column("Interface", width=250, anchor="w")
+        self.lldp_tree.column("Switch", width=180, anchor="w")
+        self.lldp_tree.column("Port", width=100, anchor="center") 
+        self.lldp_tree.pack(fill="both", expand=True)
 
+        # Buttons
         buttons = ttk.Frame(self.root)
         buttons.pack(fill="x", padx=10)
-
         ttk.Button(buttons, text="Refresh", command=self.refresh).pack(side="left", padx=5)
         ttk.Button(buttons, text="Ping Google DNS", command=self.run_ping).pack(side="left", padx=5)
         ttk.Button(buttons, text="Pulse Cable", command=self.pulse_cable).pack(side="left", padx=5)
-
+        # Activity Log
         log_frame = ttk.LabelFrame(self.root, text="Activity Log", padding=5)
         log_frame.pack(fill="both", expand=True, padx=10, pady=10)
-
         self.log = tk.Text(log_frame, height=20)
         self.log.pack(fill="both", expand=True)
 
     def write_log(self, text):
-        self.log.insert(tk.END, text + "\n")
-        self.log.see(tk.END)
+        def _write():
+            self.log.insert(
+                tk.END,
+                text + "\n"
+                )
+            self.log.see(tk.END)
+            
+        self.root.after(0, _write)
 
     def refresh(self):
         threading.Thread(target=self._refresh_worker, daemon=True).start()
@@ -228,12 +331,64 @@ class NetworkTester:
         self.public_var.set(get_public_ip())
         self.speed_var.set(get_bandwidth())
 
-        port, switch = get_lldp_info()
+        results = get_lldp_info()
 
-        self.port_var.set(port)
-        self.switch_var.set(switch)
+        print("LLDP RESULTS:")
+        print(results)
 
-        self.write_log("Network information refreshed")
+        self.root.after(
+            0,
+            lambda: self.update_lldp_tree(results)
+        )
+
+        self.write_log(
+            "Network information refreshed"
+        )
+
+        
+    def update_lldp_tree(self, results):
+
+
+       
+
+        self.lldp_tree.delete(*self.lldp_tree.get_children())
+
+        if results:
+
+            for device in results:
+                self.lldp_tree.insert(
+                    "",
+                    "end",
+                    values=(
+                        device["interface"],
+                        device["switch"],
+                        device["port"]
+                        )
+                    )
+
+                self.write_log(
+                    f"LLDP discovered on {len(results)} interface(s)"
+                    
+                )
+
+         
+        
+
+        else:
+
+            self.lldp_tree.insert(
+                "",
+                "end",
+                values=(
+                    "-",
+                    "No LLDP Detected",
+                    "-"
+                )
+            )
+
+            self.write_log(
+            "No LLDP packets detected on any interface"
+            )
 
     def run_ping(self):
         threading.Thread(target=self._ping_worker, daemon=True).start()
@@ -247,6 +402,7 @@ class NetworkTester:
             "Not Implemented",
             "Cable pulse feature requires vendor-specific hardware support."
         )
+
 
 
 if __name__ == '__main__':
